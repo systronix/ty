@@ -1,0 +1,12 @@
+[Desktop Entry]
+Version=0.8.10
+Type=Application
+Name=Tycmndr
+Exec=/home/bruce/Documents/code/tytools/build/linux/tycommander
+#Exec=/home/bruce/Documents/arduino-1.8.8/arduino
+Terminal=false
+Categories=Development;IDE;Electronics;
+MimeType=text/x-arduino;
+Comment=tycommander
+Icon=/home/bruce/Documents/code/tytools/resources/images/tycommander.png
+
