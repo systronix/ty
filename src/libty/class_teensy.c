@@ -38,7 +38,8 @@ static ty_model identify_model_bcd(uint16_t bcd_device)
         case 0x273: { model = TY_MODEL_TEENSY_LC; } break;
         case 0x276: { model = TY_MODEL_TEENSY_35; } break;
         case 0x277: { model = TY_MODEL_TEENSY_36; } break;
-        case 0x278: { model = TY_MODEL_TEENSY_40; } break;
+        case 0x278: { model = TY_MODEL_TEENSY_40_BETA1; } break;
+        case 0x279: { model = TY_MODEL_TEENSY_40; } break;
     }
 
     if (model != 0) {
@@ -65,7 +66,8 @@ static ty_model identify_model_halfkay(uint16_t usage)
         case 0x21: { model = TY_MODEL_TEENSY_32; } break;
         case 0x1F: { model = TY_MODEL_TEENSY_35; } break;
         case 0x22: { model = TY_MODEL_TEENSY_36; } break;
-        case 0x23: { model = TY_MODEL_TEENSY_40; } break;
+        case 0x23: { model = TY_MODEL_TEENSY_40_BETA1; } break;
+        case 0x24: { model = TY_MODEL_TEENSY_40; } break;
     }
 
     if (model != 0) {
@@ -347,8 +349,13 @@ static unsigned int teensy_identify_models(const ty_firmware *fw, ty_model *rmod
         uint64_t flash_config_8 = read_uint64_le(teensy4_segment->data);
 
         if (flash_config_8 == 0x5601000042464346) {
-            rmodels[0] = TY_MODEL_TEENSY_40;
-            return 1;
+            unsigned int models_count = 0;
+
+            rmodels[models_count++] = TY_MODEL_TEENSY_40;
+            if (max_models >= 2)
+                rmodels[models_count++] = TY_MODEL_TEENSY_40_BETA1;
+
+            return models_count;
         }
     }
 
@@ -583,10 +590,10 @@ restart:
 }
 
 static int get_halfkay_settings(ty_model model, unsigned int *rhalfkay_version,
-                                size_t *rcode_size, size_t *rblock_size)
+                                size_t *rmin_address, size_t *rmax_address, size_t *rblock_size)
 {
-    if ((model == TY_MODEL_TEENSY_PP_10 || model == TY_MODEL_TEENSY_20 ||
-         model == TY_MODEL_TEENSY_40) && !getenv("TYTOOLS_EXPERIMENTAL_BOARDS")) {
+    if ((model == TY_MODEL_TEENSY_PP_10 || model == TY_MODEL_TEENSY_20) &&
+            !getenv("TYTOOLS_EXPERIMENTAL_BOARDS")) {
         return ty_error(TY_ERROR_UNSUPPORTED,
                         "Support for %s boards is experimental, set environment variable"
                         "TYTOOLS_EXPERIMENTAL_BOARDS to any value to enable upload",
@@ -597,48 +604,58 @@ static int get_halfkay_settings(ty_model model, unsigned int *rhalfkay_version,
     switch ((ty_model_teensy)model) {
         case TY_MODEL_TEENSY_PP_10: {
             *rhalfkay_version = 1;
-            *rcode_size = 64512;
+            *rmin_address = 0;
+            *rmax_address = 0xFC00;
             *rblock_size = 256;
         } break;
         case TY_MODEL_TEENSY_20: {
             *rhalfkay_version = 1;
-            *rcode_size = 32256;
+            *rmin_address = 0;
+            *rmax_address = 0x7E00;
             *rblock_size = 128;
         } break;
         case TY_MODEL_TEENSY_PP_20: {
             *rhalfkay_version = 2;
-            *rcode_size = 130048;
+            *rmin_address = 0;
+            *rmax_address = 0x1FC00;
             *rblock_size = 256;
         } break;
         case TY_MODEL_TEENSY_30: {
             *rhalfkay_version = 3;
-            *rcode_size = 131072;
+            *rmin_address = 0;
+            *rmax_address = 0x20000;
             *rblock_size = 1024;
         } break;
         case TY_MODEL_TEENSY_31:
         case TY_MODEL_TEENSY_32: {
             *rhalfkay_version = 3;
-            *rcode_size = 262144;
+            *rmin_address = 0;
+            *rmax_address = 0x40000;
             *rblock_size = 1024;
         } break;
         case TY_MODEL_TEENSY_35: {
             *rhalfkay_version = 3;
-            *rcode_size = 524288;
+            *rmin_address = 0;
+            *rmax_address = 0x80000;
             *rblock_size = 1024;
         } break;
         case TY_MODEL_TEENSY_36: {
             *rhalfkay_version = 3;
-            *rcode_size = 1048576;
+            *rmin_address = 0;
+            *rmax_address = 0x100000;
             *rblock_size = 1024;
         } break;
         case TY_MODEL_TEENSY_LC: {
             *rhalfkay_version = 3;
-            *rcode_size = 63488;
+            *rmin_address = 0;
+            *rmax_address = 0xF800;
             *rblock_size = 512;
         } break;
+        case TY_MODEL_TEENSY_40_BETA1:
         case TY_MODEL_TEENSY_40: {
             *rhalfkay_version = 3;
-            *rcode_size = 1572864;
+            *rmin_address = 0x60000000;
+            *rmax_address = 0x60180000;
             *rblock_size = 1024;
         } break;
 
@@ -655,38 +672,39 @@ static int teensy_upload(ty_board_interface *iface, ty_firmware *fw,
                          ty_board_upload_progress_func *pf, void *udata)
 {
     unsigned int halfkay_version;
-    size_t code_size, block_size;
+    size_t min_address, max_address, block_size;
     int r;
 
-    r = get_halfkay_settings(iface->model, &halfkay_version, &code_size, &block_size);
+    r = get_halfkay_settings(iface->model, &halfkay_version, &min_address, &max_address, &block_size);
     if (r < 0)
         return r;
 
-    if (fw->total_size > code_size)
+    if (fw->max_address > max_address)
         return ty_error(TY_ERROR_RANGE, "Firmware is too big for %s",
                         ty_models[iface->model].name);
 
     if (pf) {
-        r = (*pf)(iface->board, fw, 0, code_size, udata);
+        r = (*pf)(iface->board, fw, 0, max_address - min_address, udata);
         if (r)
             return r;
     }
 
-    for (unsigned int segment_idx = 0; segment_idx < fw->segments_count; segment_idx++) {
-        const ty_firmware_segment *segment = &fw->segments[segment_idx];
+    size_t uploaded_len = 0;
+    for (size_t address = min_address; address < fw->max_address; address += block_size) {
+        char buf[8192];
+        size_t buf_len;
 
-        size_t uploaded_size = 0;
-        for (size_t offset = 0; offset < segment->size; offset += block_size) {
-            size_t write_size = TY_MIN(block_size, (size_t)(segment->size - offset));
+        memset(buf, 0, sizeof(buf));
+        buf_len = ty_firmware_extract(fw, (uint32_t)address, buf, block_size);
 
-            r = halfkay_send(iface->port, halfkay_version, block_size,
-                             segment->address + offset, segment->data + offset, write_size, 3000);
+        if (buf_len) {
+            r = halfkay_send(iface->port, halfkay_version, block_size, address, buf, buf_len, 3000);
             if (r < 0)
                 return r;
-            uploaded_size += write_size;
+            uploaded_len += buf_len;
 
             if (pf) {
-                r = (*pf)(iface->board, fw, uploaded_size, code_size, udata);
+                r = (*pf)(iface->board, fw, uploaded_len, max_address - min_address, udata);
                 if (r)
                     return r;
             }
@@ -699,9 +717,9 @@ static int teensy_upload(ty_board_interface *iface, ty_firmware *fw,
 static int teensy_reset(ty_board_interface *iface)
 {
     unsigned int halfkay_version;
-    size_t code_size, block_size;
+    size_t min_address, max_address, block_size;
 
-    int r = get_halfkay_settings(iface->model, &halfkay_version, &code_size, &block_size);
+    int r = get_halfkay_settings(iface->model, &halfkay_version, &min_address, &max_address, &block_size);
     if (r < 0)
         return r;
 
